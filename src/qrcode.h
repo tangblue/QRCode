@@ -33,10 +33,10 @@
 #ifndef __QRCODE_H_
 #define __QRCODE_H_
 
+#define CONFIG_XBM
+
 #ifndef __cplusplus
-typedef unsigned char bool;
-static const bool false = 0;
-static const bool true = 1;
+#include <stdbool.h>
 #endif
 
 #include <stdint.h>
@@ -61,6 +61,16 @@ static const bool true = 1;
 #define LOCK_VERSION       0
 #endif
 
+#define QR_LSB              0
+#define QR_MSB              1
+
+typedef struct BitBucket {
+    uint32_t bitOffsetOrWidth;
+    uint32_t lineWidth;
+    uint16_t capacityBytes;
+    uint8_t bitMode;
+    uint8_t *data;
+} BitBucket;
 
 typedef struct QRCode {
     uint8_t version;
@@ -68,7 +78,7 @@ typedef struct QRCode {
     uint8_t ecc;
     uint8_t mode;
     uint8_t mask;
-    uint8_t *modules;
+    BitBucket modulesGrid;
 } QRCode;
 
 

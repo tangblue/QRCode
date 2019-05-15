@@ -146,7 +146,7 @@ static bool isNumeric(const char *text, uint16_t length) {
 static char getModeBits(uint8_t version, uint8_t mode) {
     // Note: We use 15 instead of 16; since 15 doesn't exist and we cannot store 16 (8 + 8) in 3 bits
     // hex(int("".join(reversed([('00' + bin(x - 8)[2:])[-3:] for x in [10, 9, 8, 12, 11, 15, 14, 13, 15]])), 2))
-    unsigned int modeInfo = 0x7bbb80a;
+    uint32_t modeInfo = 0x7bbb80a;
     
 #if LOCK_VERSION == 0 || LOCK_VERSION > 9
     if (version > 9) { modeInfo >>= 9; }
@@ -165,12 +165,6 @@ static char getModeBits(uint8_t version, uint8_t mode) {
 
 #pragma mark - BitBucket
 
-typedef struct BitBucket {
-    uint32_t bitOffsetOrWidth;
-    uint16_t capacityBytes;
-    uint8_t *data;
-} BitBucket;
-
 /*
 void bb_dump(BitBucket *bitBuffer) {
     printf("Buffer: ");
@@ -183,7 +177,12 @@ void bb_dump(BitBucket *bitBuffer) {
 */
 
 static uint16_t bb_getGridSizeBytes(uint8_t size) {
+#ifdef CONFIG_XBM
+    uint16_t lineWidth = (size + 7) / 8;
+    return (lineWidth * size);
+#else
     return (((size * size) + 7) / 8);
+#endif
 }
 
 static uint16_t bb_getBufferSizeBytes(uint32_t bits) {
@@ -192,7 +191,9 @@ static uint16_t bb_getBufferSizeBytes(uint32_t bits) {
 
 static void bb_initBuffer(BitBucket *bitBuffer, uint8_t *data, int32_t capacityBytes) {
     bitBuffer->bitOffsetOrWidth = 0;
+    bitBuffer->lineWidth = capacityBytes << 3;
     bitBuffer->capacityBytes = capacityBytes;
+    bitBuffer->bitMode = QR_MSB;
     bitBuffer->data = data;
     
     memset(data, 0, bitBuffer->capacityBytes);
@@ -200,29 +201,41 @@ static void bb_initBuffer(BitBucket *bitBuffer, uint8_t *data, int32_t capacityB
 
 static void bb_initGrid(BitBucket *bitGrid, uint8_t *data, uint8_t size) {
     bitGrid->bitOffsetOrWidth = size;
+#ifdef CONFIG_XBM
+    uint32_t mask = 0x07;
+    bitGrid->lineWidth = (size + mask) & ~mask;
+    bitGrid->bitMode = QR_LSB;
+#else
+    bitGrid->lineWidth = size;
+    bitGrid->bitMode = QR_MSB;
+#endif
     bitGrid->capacityBytes = bb_getGridSizeBytes(size);
     bitGrid->data = data;
 
     memset(data, 0, bitGrid->capacityBytes);
 }
 
+static uint8_t bb_getBitOffset(BitBucket *bitGrid, uint32_t offset) {
+    return bitGrid->bitMode == QR_LSB ? (offset & 0x07) : (7 - (offset & 0x07));
+}
+
 static void bb_appendBits(BitBucket *bitBuffer, uint32_t val, uint8_t length) {
     uint32_t offset = bitBuffer->bitOffsetOrWidth;
     for (int8_t i = length - 1; i >= 0; i--, offset++) {
-        bitBuffer->data[offset >> 3] |= ((val >> i) & 1) << (7 - (offset & 7));
+        bitBuffer->data[offset >> 3] |= ((val >> i) & 1) << bb_getBitOffset(bitBuffer, offset);
     }
     bitBuffer->bitOffsetOrWidth = offset;
 }
 /*
 void bb_setBits(BitBucket *bitBuffer, uint32_t val, int offset, uint8_t length) {
     for (int8_t i = length - 1; i >= 0; i--, offset++) {
-        bitBuffer->data[offset >> 3] |= ((val >> i) & 1) << (7 - (offset & 7));
+        bitBuffer->data[offset >> 3] |= ((val >> i) & 1) << bb_getBitOffset(bitBuffer, offset);
     }
 }
 */
 static void bb_setBit(BitBucket *bitGrid, uint8_t x, uint8_t y, bool on) {
-    uint32_t offset = y * bitGrid->bitOffsetOrWidth + x;
-    uint8_t mask = 1 << (7 - (offset & 0x07));
+    uint32_t offset = y * bitGrid->lineWidth + x;
+    uint8_t mask = 1 << bb_getBitOffset(bitGrid, offset);
     if (on) {
         bitGrid->data[offset >> 3] |= mask;
     } else {
@@ -231,19 +244,22 @@ static void bb_setBit(BitBucket *bitGrid, uint8_t x, uint8_t y, bool on) {
 }
 
 static void bb_invertBit(BitBucket *bitGrid, uint8_t x, uint8_t y, bool invert) {
-    uint32_t offset = y * bitGrid->bitOffsetOrWidth + x;
-    uint8_t mask = 1 << (7 - (offset & 0x07));
-    bool on = ((bitGrid->data[offset >> 3] & (1 << (7 - (offset & 0x07)))) != 0);
-    if (on ^ invert) {
-        bitGrid->data[offset >> 3] |= mask;
-    } else {
-        bitGrid->data[offset >> 3] &= ~mask;
+    if (!invert) {
+        return;
     }
+
+    uint32_t offset = y * bitGrid->lineWidth + x;
+    uint8_t mask = 1 << bb_getBitOffset(bitGrid, offset);
+    bitGrid->data[offset >> 3] ^= mask;
+}
+
+static bool bb_getBitByOffset(BitBucket *bitGrid, uint32_t offset) {
+    return (bitGrid->data[offset >> 3] & (1 << bb_getBitOffset(bitGrid, offset))) != 0;
 }
 
 static bool bb_getBit(BitBucket *bitGrid, uint8_t x, uint8_t y) {
-    uint32_t offset = y * bitGrid->bitOffsetOrWidth + x;
-    return (bitGrid->data[offset >> 3] & (1 << (7 - (offset & 0x07)))) != 0;
+    uint32_t offset = y * bitGrid->lineWidth + x;
+    return bb_getBitByOffset(bitGrid, offset);
 }
 
 
@@ -441,7 +457,6 @@ static void drawFunctionPatterns(BitBucket *modules, BitBucket *isFunction, uint
 static void drawCodewords(BitBucket *modules, BitBucket *isFunction, BitBucket *codewords) {
     
     uint32_t bitLength = codewords->bitOffsetOrWidth;
-    uint8_t *data = codewords->data;
     
     uint8_t size = modules->bitOffsetOrWidth;
     
@@ -458,7 +473,7 @@ static void drawCodewords(BitBucket *modules, BitBucket *isFunction, BitBucket *
                 bool upwards = ((right & 2) == 0) ^ (x < 6);
                 uint8_t y = upwards ? size - 1 - vert : vert;  // Actual y coordinate
                 if (!bb_getBit(isFunction, x, y) && i < bitLength) {
-                    bb_setBit(modules, x, y, ((data[i >> 3] >> (7 - (i & 7))) & 1) != 0);
+                    bb_setBit(modules, x, y, bb_getBitByOffset(codewords, i));
                     i++;
                 }
                 // If there are any remainder bits (0 to 7), they are already
@@ -777,7 +792,8 @@ int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8
     qrcode->version = version;
     qrcode->size = size;
     qrcode->ecc = ecc;
-    qrcode->modules = modules;
+    BitBucket *modulesGrid = &qrcode->modulesGrid;
+    bb_initGrid(modulesGrid, modules, size);
     
     uint8_t eccFormatBits = (ECC_FORMAT_BITS >> (2 * ecc)) & 0x03;
     
@@ -811,39 +827,36 @@ int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8
         bb_appendBits(&codewords, padByte, 8);
     }
 
-    BitBucket modulesGrid;
-    bb_initGrid(&modulesGrid, modules, size);
-    
     BitBucket isFunctionGrid;
     uint8_t isFunctionGridBytes[bb_getGridSizeBytes(size)];
     bb_initGrid(&isFunctionGrid, isFunctionGridBytes, size);
     
     // Draw function patterns, draw all codewords, do masking
-    drawFunctionPatterns(&modulesGrid, &isFunctionGrid, version, eccFormatBits);
+    drawFunctionPatterns(modulesGrid, &isFunctionGrid, version, eccFormatBits);
     performErrorCorrection(version, eccFormatBits, &codewords);
-    drawCodewords(&modulesGrid, &isFunctionGrid, &codewords);
+    drawCodewords(modulesGrid, &isFunctionGrid, &codewords);
     
     // Find the best (lowest penalty) mask
     uint8_t mask = 0;
     int32_t minPenalty = INT32_MAX;
     for (uint8_t i = 0; i < 8; i++) {
-        drawFormatBits(&modulesGrid, &isFunctionGrid, eccFormatBits, i);
-        applyMask(&modulesGrid, &isFunctionGrid, i);
-        int penalty = getPenaltyScore(&modulesGrid);
+        drawFormatBits(modulesGrid, &isFunctionGrid, eccFormatBits, i);
+        applyMask(modulesGrid, &isFunctionGrid, i);
+        int penalty = getPenaltyScore(modulesGrid);
         if (penalty < minPenalty) {
             mask = i;
             minPenalty = penalty;
         }
-        applyMask(&modulesGrid, &isFunctionGrid, i);  // Undoes the mask due to XOR
+        applyMask(modulesGrid, &isFunctionGrid, i);  // Undoes the mask due to XOR
     }
     
     qrcode->mask = mask;
     
     // Overwrite old format bits
-    drawFormatBits(&modulesGrid, &isFunctionGrid, eccFormatBits, mask);
+    drawFormatBits(modulesGrid, &isFunctionGrid, eccFormatBits, mask);
     
     // Apply the final choice of mask
-    applyMask(&modulesGrid, &isFunctionGrid, mask);
+    applyMask(modulesGrid, &isFunctionGrid, mask);
 
     return 0;
 }
@@ -857,8 +870,7 @@ bool qrcode_getModule(QRCode *qrcode, uint8_t x, uint8_t y) {
         return false;
     }
 
-    uint32_t offset = y * qrcode->size + x;
-    return (qrcode->modules[offset >> 3] & (1 << (7 - (offset & 0x07)))) != 0;
+    return bb_getBit(&qrcode->modulesGrid, x, y);
 }
 
 /*
