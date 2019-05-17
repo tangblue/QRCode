@@ -495,8 +495,8 @@ static void drawCodewords(BitBucket *modules, BitBucket *isFunction, BitBucket *
 // Calculates and returns the penalty score based on state of this QR Code's current modules.
 // This is used by the automatic mask choice algorithm to find the mask pattern that yields the lowest score.
 // @TODO: This can be optimized by working with the bytes instead of bits.
-static uint32_t getPenaltyScore(BitBucket *modules) {
-    uint32_t result = 0;
+static int32_t getPenaltyScore(BitBucket *modules) {
+    int32_t result = 0;
     
     uint8_t size = modules->bitOffsetOrWidth;
     
@@ -540,7 +540,7 @@ static uint32_t getPenaltyScore(BitBucket *modules) {
         }
     }
     
-    uint16_t black = 0;
+    int32_t black = 0;
     for (uint8_t y = 0; y < size; y++) {
         uint16_t bitsRow = 0, bitsCol = 0;
         for (uint8_t x = 0; x < size; x++) {
@@ -576,8 +576,8 @@ static uint32_t getPenaltyScore(BitBucket *modules) {
     }
 
     // Find smallest k such that (45-5k)% <= dark/total <= (55+5k)%
-    uint16_t total = size * size;
-    for (uint16_t k = 0; black * 20 < (9 - k) * total || black * 20 > (11 + k) * total; k++) {
+    int32_t total = size * size;
+    for (int32_t k = 0; black * 20 < (9 - k) * total || black * 20 > (11 + k) * total; k++) {
         result += PENALTY_N4;
     }
     
@@ -842,7 +842,7 @@ int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8
     for (uint8_t i = 0; i < 8; i++) {
         drawFormatBits(modulesGrid, &isFunctionGrid, eccFormatBits, i);
         applyMask(modulesGrid, &isFunctionGrid, i);
-        int penalty = getPenaltyScore(modulesGrid);
+        int32_t penalty = getPenaltyScore(modulesGrid);
         if (penalty < minPenalty) {
             mask = i;
             minPenalty = penalty;
